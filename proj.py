@@ -26,27 +26,38 @@ def parse_input(input_file):
         duration = int(parts[1])
         durations.append(duration)
         #print('duration', duration)
-
         if len(ast.literal_eval(parts[2])) < 1:
-            machines = [int(i)+1 for i in range(num_machines)]
+            machines = [True for i in range(num_machines)]
             machine_eligible.append(machines)
             #print('machines', machines)
         else:
             machines_str = re.sub(r"[\[\]'m]", "", parts[2])
             machines = [int(machine) for machine in machines_str.split(',')]
-            machine_eligible.append(machines)
+            machines_bool = []
+            for i in range(num_machines):
+                if i+1 not in machines:
+                    machines_bool.append(False)
+                else:
+                    machines_bool.append(True)
+            machine_eligible.append(machines_bool)
             #print('machines', machines)
             
         parts[3] = parts[3].replace(")", "").replace("\n", "")
 
         if len(ast.literal_eval(parts[3])) < 1:
-            resources = []
+            resources = [False for i in range(num_resources)]
             required_resources.append(resources)
             #print('resources', resources)
         else:
             resources_str = re.sub(r"[\[\]'r]", "", parts[3])
             resources = [int(resource) for resource in resources_str.split(',')]
-            required_resources.append(resources)
+            resources_bool = []
+            for i in range(num_resources):
+                if i+1 not in resources:
+                    resources_bool.append(False)
+                else:
+                    resources_bool.append(True)
+            required_resources.append(resources_bool)
             #print('resources', resources)
 
         i += 1
@@ -54,11 +65,23 @@ def parse_input(input_file):
     return num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources
 
 
-def write_output(output_file, makespan, schedule):
+def write_output(output_file, makespan, start_times, assigned_machines, num_machines, num_tests):
+
+    machine_tests = []
+    for i in range(num_machines):
+        tests = [(f"t{t+1}", start_times[t]) for t in range(num_tests) if assigned_machines[t] == i + 1]
+        tests.sort(key=lambda x: x[1])
+        machine_tests.append(tests)
+
     with open(output_file, 'w') as file:
         file.write(f"% Makespan : {makespan}\n")
-        for machine, tests in schedule.items():
-            file.write(f"machine( '{machine}', {len(tests)}, {tests} )\n")
+        for i, tests in enumerate(machine_tests):
+            file.write(f"machine(m{i+1}, {len(tests)}, [")
+            for j, (test, start_time) in enumerate(tests):
+                file.write(f"({test}, {start_time})")
+                if j != len(tests) - 1:
+                    file.write(", ")
+            file.write("])\n")
 
 def main(input_file, output_file):
     # Load the model
@@ -86,12 +109,18 @@ def main(input_file, output_file):
     # Solve the model
     result = instance.solve()
 
-    # Write the results to output file
-    with open(output_file, 'w') as f:
-        f.write(result["output"])
+    # Check if there is a valid solution
+    if result.status.has_solution():
+        print(result)
+        write_output(output_file, result["objective"], result["start_times"], result["assigned_machines"], num_machines, num_tests)
+    else:
+        print("No solution found or inconsistency in the model.")
+        print(f"Status: {result.status}")  # This will give more details on what went wrong
+
 
 if __name__ == "__main__":
     import sys
     input_file = sys.argv[1]
     output_file = sys.argv[2]
+    print(input_file, output_file)
     main(input_file, output_file)
