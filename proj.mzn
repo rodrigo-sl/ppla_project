@@ -1,6 +1,8 @@
 int: num_tests;
 int: num_machines;
 int: num_resources;
+int: min_makespan;
+int: max_makespan;
 
 array[1..num_tests] of int: durations;
 array[1..num_tests, 1..num_machines] of bool: required_machines;
@@ -13,7 +15,7 @@ array[1..num_tests] of var 1..num_machines: assigned_machines; % Machine assigne
 % Compute end times for each test
 array[1..num_tests] of var int: end_times = [start_times[i] + durations[i] | i in 1..num_tests];
 
-var int: makespan = max(end_times);
+var min_makespan..max_makespan: makespan = max(end_times);
 
 % Constraints
 
