@@ -14,6 +14,9 @@ def parse_input(input_file):
     durations = []
     machine_eligible = []
     required_resources = []
+    min_test_duration = int(lines[3:num_tests+3][0].split(", ")[1])
+    machine_avg_duration = [0 for i in range(num_machines)]
+    total_resource_time = [0 for i in range(num_resources)] # total time that each resource is used
 
     i = 1
     for line in lines[3:num_tests+3]:
@@ -24,6 +27,8 @@ def parse_input(input_file):
         #print(parts)
 
         duration = int(parts[1])
+        if duration < min_test_duration:
+            min_test_duration = duration
         durations.append(duration)
         #print('duration', duration)
         if len(ast.literal_eval(parts[2])) < 1:
@@ -57,13 +62,36 @@ def parse_input(input_file):
                     resources_bool.append(False)
                 else:
                     resources_bool.append(True)
+                    # change the total time that each resource is used
+                    total_resource_time[i] += duration
             required_resources.append(resources_bool)
             #print('resources', resources)
 
         i += 1
-    
-    return num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources
 
+    # order the machines to get a priority list
+    for t in range(num_tests):
+        for m in range(num_machines):
+            if machine_eligible[t][m]:
+                machine_avg_duration[m] += (durations[t] / sum(machine_eligible[t]))
+    # create a list of machines ordered by average duration
+    machines_ordered = [i+1 for i in range(num_machines)]
+    # crescent order
+    machines_ordered.sort(key=lambda x: machine_avg_duration[x-1])
+
+    resource_usage_test = [0 for i in range(num_tests)]
+    for t in range(num_tests):
+        for r in range(num_resources):
+            if required_resources[t][r]:
+                if total_resource_time[r] > resource_usage_test[t]:
+                    resource_usage_test[t] = total_resource_time[r]
+        
+
+    # order the tests to get a priority list
+
+    # calculate the total
+
+    return num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, resource_usage_test
 
 def write_output(output_file, makespan, start_times, assigned_machines, num_machines, num_tests):
 
@@ -83,7 +111,7 @@ def write_output(output_file, makespan, start_times, assigned_machines, num_mach
                     file.write(", ")
             file.write("])\n")
 
-def find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources):
+def find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, machines_ordered):
 
     # compute the sum of all the durations
     sum_durations = sum(durations)
@@ -105,13 +133,13 @@ def find_max_makespan(num_tests, num_machines, num_resources, durations, machine
                 for j in range(durations[test]):
                     resource_usage[i][start_time + j] = True
 
-    def find_smallest_gap_for_test(test):
+    def find_smallest_gap_for_test(test, machines_ordered):
         # find the smallest gap in the machine_usage matrix for the test
         smallest_gap = -1
         gap_type = 1 # 0 if the gap is in the middle of other tests, 1 if the gap is at the end of the tests
         start_time = sum_durations
         machine = -1
-        for m in range(num_machines):
+        for m in machines_ordered:
             if not machine_eligible[test][m]:
                 continue
             t = 0
@@ -126,7 +154,7 @@ def find_max_makespan(num_tests, num_machines, num_resources, durations, machine
                     gap += 1
                     t += 1
                 if t == sum_durations:
-                    if gap >= durations[test] and gap > smallest_gap:
+                    if gap >= durations[test] and gap > smallest_gap and gap_type == 1:
                         smallest_gap = gap
                         start_time = t - gap
                         machine = m
@@ -154,10 +182,21 @@ def find_max_makespan(num_tests, num_machines, num_resources, durations, machine
     tests_no_constraints.sort(key=lambda x: durations[x], reverse=True)
 
     tests = tests_with_resources + tests_with_machines + tests_no_constraints
+    tests_print = [i + 1 for i in tests]
+    print("tests", tests_print)
 
+    start_times = [0 for i in range(num_tests)]
+    assigned_machines = [0 for i in range(num_tests)]
+    ordered_machines = [i - 1 for i in machines_ordered]
+    print("ordered_machines", machines_ordered)
     for test in tests:
-        machine, start_time = find_smallest_gap_for_test(test)
+        machine, start_time = find_smallest_gap_for_test(test, ordered_machines)
         introduce_test_in_machine(test, machine, start_time)
+        start_times[test] = start_time
+        assigned_machines[test] = machine + 1
+    #print("start_times", start_times)
+    #print("assigned_machines", assigned_machines)
+
 
     # find the maximum makespan
     makespan = 0
@@ -166,7 +205,9 @@ def find_max_makespan(num_tests, num_machines, num_resources, durations, machine
             if machine_usage[m][t]:
                 makespan = max(makespan, t + 1)
     
-    return makespan
+    # return the start times for all tests and machines assigned to each test
+
+    return makespan, start_times, assigned_machines
 
 def find_min_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources):
 
@@ -183,16 +224,27 @@ def find_min_makespan(num_tests, num_machines, num_resources, durations, machine
 def main(input_file, output_file):
     # Load the model
     model = Model("proj.mzn")
-    solver = Solver.lookup("gecode")  # Or any other solver you are using
+    solver = Solver.lookup("chuffed")  # Or any other solver you are using
 
     # Parse the input file (as you've done before)
-    num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources = parse_input(input_file)
+    num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, resource_usage_test = parse_input(input_file)
 
     min_makespan = find_min_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources)
-    max_makespan = find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources)
+    max_makespan, start_times, assigned_machines = find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, machines_ordered)
     print('min_makespan', min_makespan)
     print('max_makespan', max_makespan)
 
+    tests_weights = [0 for i in range(num_tests)]
+    for t in range(num_tests):
+        tests_weights[t] = ((0.8 * resource_usage_test[t] / max_makespan) + 0.2) * durations[t]
+
+    print('tests_weights', tests_weights)
+
+    tests_ordered = [i+1 for i in range(num_tests)]
+    # sort with tests with larger weights first
+    tests_ordered.sort(key=lambda x: tests_weights[x-1], reverse=True)
+    print("machines ordered:\n", machines_ordered)
+    print("tests ordered:\n", tests_ordered)
 
     # Create an instance of the model
     instance = Instance(solver, model)
@@ -204,6 +256,12 @@ def main(input_file, output_file):
     instance["required_resources"] = required_resources
     instance["min_makespan"] = min_makespan
     instance["max_makespan"] = max_makespan
+    instance["min_test_duration"] = min_test_duration
+    #instance["machines_ordered"] = machines_ordered
+    #instance["tests_ordered"] = tests_ordered
+    #instance["assigned_machines"] = assigned_machines
+    #instance["start_times"] = start_times
+
     """print('num_tests', num_tests)
     print('num_machines', num_machines)
     print('num_resources', num_resources)
