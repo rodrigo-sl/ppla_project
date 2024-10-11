@@ -1,7 +1,14 @@
 import sys
 import ast
 import re
+import math
 from minizinc import Instance, Model, Solver
+from datetime import timedelta
+
+# Constants
+SOLVER = "chuffed"
+TIME_LIMIT = timedelta(seconds=120)
+
 
 def parse_input(input_file):
     with open(input_file, 'r') as file:
@@ -66,7 +73,6 @@ def parse_input(input_file):
                     total_resource_time[i] += duration
             required_resources.append(resources_bool)
             #print('resources', resources)
-
         i += 1
 
     # order the machines to get a priority list
@@ -89,24 +95,33 @@ def parse_input(input_file):
 
     # order the tests to get a priority list
 
-    # calculate the total
-
     return num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, resource_usage_test
 
-def write_output(output_file, makespan, start_times, assigned_machines, num_machines, num_tests):
+def write_output(output_file, makespan, start_times, assigned_machines, num_machines, num_tests, required_resources):
 
     machine_tests = []
     for i in range(num_machines):
-        tests = [(f"t{t+1}", start_times[t]) for t in range(num_tests) if assigned_machines[t] == i + 1]
+        tests = [(f"'t{t+1}'", start_times[t]) for t in range(num_tests) if assigned_machines[t] == i + 1]
         tests.sort(key=lambda x: x[1])
         machine_tests.append(tests)
 
     with open(output_file, 'w') as file:
         file.write(f"% Makespan : {makespan}\n")
         for i, tests in enumerate(machine_tests):
-            file.write(f"machine(m{i+1}, {len(tests)}, [")
+            file.write(f"machine('m{i+1}', {len(tests)}, [")
             for j, (test, start_time) in enumerate(tests):
-                file.write(f"({test}, {start_time})")
+                test_int = int(test[2:-1]) - 1
+                file.write(f"({test}, {start_time}")
+                if any(required_resources[test_int]):
+                    file.write(", [")
+                    for k, resource in enumerate(required_resources[test_int]):
+                        if resource:
+                            file.write(f"'r{k+1}'")
+                            if k != len(required_resources[test_int]) - 1:
+                                file.write(", ")
+                    file.write("]")
+                file.write(")")
+                
                 if j != len(tests) - 1:
                     file.write(", ")
             file.write("])\n")
@@ -217,9 +232,94 @@ def find_min_makespan(num_tests, num_machines, num_resources, durations, machine
         for j in range(num_resources):
             if required_resources[i][j]:
                 resource_durations[j] += durations[i]
-    return max(resource_durations)
+    max_resources = max(resource_durations)
+    return max(max_resources, math.ceil(sum(durations) / num_machines))
     
+def assign_obvious_machines(machine_eligible, num_tests):
+    assigned_machines = [0 for i in range(num_tests)]
+    for i in range(num_tests):
+        if machine_eligible[i].count(True) == 1:
+            assigned_machines[i] = machine_eligible[i].index(True) + 1
+    return assigned_machines
 
+def binary_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines):
+    # binary search for the best makespan
+    print("BINARY SEARCH")
+    print("min test duration", min_test_duration)
+    left = min_makespan
+    right = max_makespan
+    while left < right:
+        mid = (left + right) // 2
+        print(f"Currently trying with the value {mid}")
+        # Create an instance of the model
+        model = Model("proj_satisfy.mzn")
+        solver = Solver.lookup(SOLVER)
+
+        # Create an instance of the model
+        instance = Instance(solver, model)
+        instance["num_tests"] = num_tests
+        instance["num_machines"] = num_machines
+        instance["num_resources"] = num_resources
+        instance["durations"] = durations
+        instance["required_machines"] = machine_eligible
+        instance["required_resources"] = required_resources
+        instance["target_makespan"] = mid
+        instance["min_test_duration"] = min_test_duration
+        instance["machines_ordered"] = set(machines_ordered)
+        instance["tests_ordered"] = set(tests_ordered)
+        instance["hardcoded_machines"] = hardcoded_machines
+        #instance["initial_assigned_machines"] = assigned_machines
+        #instance["initial_start_times"] = start_times
+
+
+        result = instance.solve(timeout=TIME_LIMIT)
+        # Check if there is a valid solution
+        if result.status.has_solution():
+            print(result)
+            write_output(output_file, mid, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
+            print(f"Current best solution: {mid}")
+            right = mid
+        else:
+            print("No solution found or inconsistency in the model.")
+            print(f"Status: {result.status}")  # This will give more details on what went wrong
+            left = mid + 1
+    if not result.status.has_solution():
+        single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, left, right, assigned_machines, start_times, hardcoded_machines)
+
+
+
+def single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines):
+    
+    print(f"Currently trying with the value {min_makespan}")
+
+    model = Model("proj_satisfy.mzn")
+    solver = Solver.lookup(SOLVER)
+
+    # Create an instance of the model
+    instance = Instance(solver, model)
+    instance["num_tests"] = num_tests
+    instance["num_machines"] = num_machines
+    instance["num_resources"] = num_resources
+    instance["durations"] = durations
+    instance["required_machines"] = machine_eligible
+    instance["required_resources"] = required_resources
+    instance["target_makespan"] = min_makespan
+    instance["min_test_duration"] = min_test_duration
+    instance["machines_ordered"] = set(machines_ordered)
+    instance["tests_ordered"] = set(tests_ordered)
+    instance["hardcoded_machines"] = hardcoded_machines
+    instance["initial_assigned_machines"] = assigned_machines
+    instance["initial_start_times"] = start_times
+
+    result = instance.solve(timeout=TIME_LIMIT)
+
+    if result.status.has_solution():
+        print(result)
+        write_output(output_file, min_makespan, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
+        print(f"Current best solution: {min_makespan}")
+    else:
+        print("No solution found or inconsistency in the model.")
+        print(f"Status: {result.status}")  # This will give more details on what went wrong
 
 def main(input_file, output_file):
     # Load the model
@@ -238,14 +338,25 @@ def main(input_file, output_file):
     for t in range(num_tests):
         tests_weights[t] = ((0.8 * resource_usage_test[t] / max_makespan) + 0.2) * durations[t]
 
-    print('tests_weights', tests_weights)
-
     tests_ordered = [i+1 for i in range(num_tests)]
     # sort with tests with larger weights first
     tests_ordered.sort(key=lambda x: tests_weights[x-1], reverse=True)
     print("machines ordered:\n", machines_ordered)
     print("tests ordered:\n", tests_ordered)
+    print("initial_assigned_machines: ", assigned_machines)
+    print("initial_start_times: ", start_times)
 
+    # unmodifiable machines
+    hardcoded_machines = assign_obvious_machines(machine_eligible, num_tests)
+    
+    """if(min_makespan < max_makespan):
+        binary_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines)
+    else:
+        single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines)
+""" 
+
+    single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, max_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines)
+"""
     # Create an instance of the model
     instance = Instance(solver, model)
     instance["num_tests"] = num_tests
@@ -257,28 +368,21 @@ def main(input_file, output_file):
     instance["min_makespan"] = min_makespan
     instance["max_makespan"] = max_makespan
     instance["min_test_duration"] = min_test_duration
-    #instance["machines_ordered"] = machines_ordered
-    #instance["tests_ordered"] = tests_ordered
-    #instance["assigned_machines"] = assigned_machines
-    #instance["start_times"] = start_times
+    instance["machines_ordered"] = set(machines_ordered)
+    instance["tests_ordered"] = set(tests_ordered)
+    instance["hardcoded_machines"] = hardcoded_machines
+    instance["initial_assigned_machines"] = assigned_machines
+    instance["initial_start_times"] = start_times
 
-    """print('num_tests', num_tests)
-    print('num_machines', num_machines)
-    print('num_resources', num_resources)
-    print('durations', durations)
-    print('required_machines', machine_eligible)
-    print('req_resources', required_resources)"""
-    
-    # Solve the model
+
     result = instance.solve()
-
     # Check if there is a valid solution
     if result.status.has_solution():
         print(result)
-        write_output(output_file, result["objective"], result["start_times"], result["assigned_machines"], num_machines, num_tests)
+        write_output(output_file, result["objective"], result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
     else:
         print("No solution found or inconsistency in the model.")
-        print(f"Status: {result.status}")  # This will give more details on what went wrong
+        print(f"Status: {result.status}")  # This will give more details on what went wrong"""
 
 
 if __name__ == "__main__":

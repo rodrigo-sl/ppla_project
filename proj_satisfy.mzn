@@ -1,8 +1,7 @@
 int: num_tests;
 int: num_machines;
 int: num_resources;
-int: min_makespan;
-int: max_makespan;
+int: target_makespan;
 int: min_test_duration;
 
 array[1..num_tests] of int: durations;
@@ -13,22 +12,23 @@ set of int: machines_ordered;  % Specific order of machines
 set of int: tests_ordered;  % Specific order of tests
 % Decision variables
 array[1..num_tests] of var 1..num_machines: assigned_machines; % Machine assigned to each test
-array[1..num_tests] of var 0..max_makespan - min_test_duration: start_times; % Start time for each test
+array[1..num_tests] of var 0..target_makespan - min_test_duration: start_times; % Start time for each test
 % hardcoded arrays
 array[1..num_tests] of 0..num_machines: hardcoded_machines;
 % warm-start
-array[1..num_tests] of 1..num_machines: initial_assigned_machines;
-array[1..num_tests] of 0..max_makespan - min_test_duration: initial_start_times;
+%array[1..num_tests] of 1..num_machines: initial_assigned_machines;
+%array[1..num_tests] of 0..target_makespan - min_test_duration: initial_start_times;
 
 % Compute end times for each test
 array[1..num_tests] of var int: end_times = [start_times[i] + durations[i] | i in 1..num_tests];
 array[1..num_resources] of var int: total_resource_usage = [sum(i in 1..num_tests where required_resources[i, r])(durations[i]) | r in 1..num_resources];
 array[1..num_machines] of var int: machine_usage = [sum(i in 1..num_tests where assigned_machines[i] == m)(durations[i]) | m in 1..num_machines];
 
-var min_makespan..max_makespan: makespan = max(end_times);
+var int: makespan = max(end_times);
 
 % Constraints
 
+constraint makespan <= target_makespan;
 
 constraint forall(i in 1..num_tests)(
     start_times[i] >= 0  % Ensure the test starts after time 0
@@ -86,21 +86,7 @@ constraint forall(m in 1..num_machines)(
         )
     )
 );
-solve
-:: warm_start( start_times, initial_start_times)
-:: warm_start( assigned_machines, initial_assigned_machines)
-::int_s
-%::int_search(assigned_machines, first_fail, indomain_min)
 
-% do a priority search, using input_order
-%::priority_search([tests_ordered[i] | i in 1..num_tests], assigned_machines, input_order, indomain_min)
-minimize makespan;
-
-/*constraint forall (r in 1..num_resources where total_resource_usage[r] == max_makespan)(
-    exists(i in 1..num_tests where required_resources[i, r])(
-        start_times[i] == 0
-    )
-);*/
 /*constraint forall(m in 1..num_machines)(
     forall (t1 in 1..num_tests where assigned_machines[t1] == m)(
         % either all tests are already assigned by the time t1 finishes
@@ -136,31 +122,13 @@ minimize makespan;
         )
     )
 );*/
+solve
+%:: warm_start( start_times, initial_start_times)
+%:: warm_start( assigned_machines, initial_assigned_machines)
+%::int_search(assigned_machines, first_fail, indomain_min)
 
-% whenever a test ends, there is another test that starts immediately after it, unless
-% all tests are already assigned by the time the test finishes
-/*constraint forall(i in 1..num_tests)(
-    end_times[i] < max(end_times) ->
-    exists(j in 1..num_tests where j != i)(
-        start_times[j] == end_times[i]
-    )
-);*/
-/*constraint forall(m, n in 1..num_machines where m > n)(
-    abs(sum(i in 1..num_tests where assigned_machines[i] == m)(
-        durations[i]
-    ) - sum(j in 1..num_tests where assigned_machines[j] == n)(
-        durations[j]
-    )) <= max(t in 1..num_tests)(durations[t])
-);*/
-
-
-
-
-/*constraint forall(i in 1..num_tests, j in 1..num_machines)(
-    (assigned_machines[tests_ordered[i]] = machines_ordered[j]) -> 
-    i <= j
-);*/
-
-
+% do a priority search, using input_order
+%::priority_search([tests_ordered[i] | i in 1..num_tests], assigned_machines, input_order, indomain_min)
+satisfy;
 
 
