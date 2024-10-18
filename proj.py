@@ -371,7 +371,7 @@ def check_equal_machines(num_tests, num_machines, machine_eligible):
                 equal_machines.append((parallel_set[i]+1, parallel_set[i+1]+1))
     return equal_machines, len(equal_machines)
 
-def create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, target_makespan,
+def create_and_run_minizinc_model(required_resources_original, num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, target_makespan,
                                   min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                   resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                   tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
@@ -417,7 +417,8 @@ def create_and_run_minizinc_model(num_tests, num_machines, num_resources, durati
 
     if result.status.has_solution():
         print(result)
-        write_output(output_file, target_makespan, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
+        print('Required Resources', required_resources)
+        write_output(output_file, target_makespan, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources_original)
         print(f"Current best solution: {target_makespan}")
         return True
     else:
@@ -477,7 +478,7 @@ def run_alternative_model(num_tests, num_machines, num_resources, durations, mac
             print(f"Status: {result.status}")  # This will give more details on what went wrong"""
             return False
 
-def binary_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_makespan, max_makespan,
+def binary_search(required_resources_original, num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_makespan, max_makespan,
                                   min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                   resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                   tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
@@ -485,7 +486,7 @@ def binary_search(num_tests, num_machines, num_resources, durations, machine_eli
     
     use_alternative_model = False
     # start by running the minizinc model with the max makespan, to get a solution
-    found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, max_makespan,
+    found_solution = create_and_run_minizinc_model(required_resources_original, num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, max_makespan,
                                     min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                     resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                     tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
@@ -518,7 +519,7 @@ def binary_search(num_tests, num_machines, num_resources, durations, machine_eli
                                   tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
                                   eq_tests, num_eq_tests, eq_machines, num_eq_machines)
         else:
-            found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, mid,
+            found_solution = create_and_run_minizinc_model(required_resources_original, num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, mid,
                                     min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                     resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                     tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
@@ -536,7 +537,7 @@ def binary_search(num_tests, num_machines, num_resources, durations, machine_eli
                                     tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
                                     eq_tests, num_eq_tests, eq_machines, num_eq_machines)
         else:
-            found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, left,
+            found_solution = create_and_run_minizinc_model(required_resources_original, num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, left,
                                         min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                         resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                         tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
@@ -695,7 +696,8 @@ def main(input_file, output_file):
     if new_min_makespan is not None:
         if new_min_makespan > min_makespan:
             min_makespan = new_min_makespan
-    binary_search(num_tests=num_tests, num_machines=num_machines, num_resources=num_resources_updated, durations=durations, machine_eligible=machine_eligible, required_resources=required_resources_updated, min_makespan=min_makespan, max_makespan=max_makespan,
+    print('required_resources', required_resources)
+    binary_search(required_resources_original=required_resources, num_tests=num_tests, num_machines=num_machines, num_resources=num_resources_updated, durations=durations, machine_eligible=machine_eligible, required_resources=required_resources_updated, min_makespan=min_makespan, max_makespan=max_makespan,
                                   min_test_duration=min_test_duration, hardcoded_machines=hardcoded_machines, initial_assigned_machines=assigned_machines, initial_start_times=start_times,
                                   resource_splits=resource_splits, total_resources_num=len(tests_ordered_by_resource_ids), tests_ordered_by_resource_ids=tests_ordered_by_resource_ids, tests_with_same_resources=tests_with_same_resources,
                                   tests_with_same_resources_splits=tests_with_same_resources_splits, num_tests_with_same_resources=num_tests_with_same_resources, num_tests_with_same_resources_splits=num_tests_with_same_resources_splits,

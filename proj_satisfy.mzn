@@ -1,3 +1,4 @@
+% Use this editor as a MiniZinc scratch book
 include "cumulative.mzn";
 int: num_tests;
 int: num_machines;
