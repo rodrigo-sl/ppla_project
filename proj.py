@@ -4,17 +4,18 @@ import re
 import math
 from minizinc import Instance, Model, Solver
 from datetime import timedelta
+from time import time
 
 # Constants
 SOLVER = "chuffed"
-TIME_LIMIT = timedelta(seconds=120)
+TIME_LIMIT = timedelta(seconds=20)
+TIME_LIMIT_MINIZINC = timedelta(seconds=10)
 
 
 def parse_input(input_file):
     with open(input_file, 'r') as file:
         lines = file.readlines()
 
-    tests = []
     num_tests = int(lines[0].split()[5])
     num_machines = int(lines[1].split()[5])
     num_resources = int(lines[2].split()[5])
@@ -22,26 +23,20 @@ def parse_input(input_file):
     machine_eligible = []
     required_resources = []
     min_test_duration = int(lines[3:num_tests+3][0].split(", ")[1])
-    machine_avg_duration = [0 for i in range(num_machines)]
     total_resource_time = [0 for i in range(num_resources)] # total time that each resource is used
 
     i = 1
     for line in lines[3:num_tests+3]:
 
-        #print('test', i)
-
         parts = line.split(", ")
-        #print(parts)
 
         duration = int(parts[1])
         if duration < min_test_duration:
             min_test_duration = duration
         durations.append(duration)
-        #print('duration', duration)
         if len(ast.literal_eval(parts[2])) < 1:
             machines = [True for i in range(num_machines)]
             machine_eligible.append(machines)
-            #print('machines', machines)
         else:
             machines_str = re.sub(r"[\[\]'m]", "", parts[2])
             machines = [int(machine) for machine in machines_str.split(',')]
@@ -52,7 +47,6 @@ def parse_input(input_file):
                 else:
                     machines_bool.append(True)
             machine_eligible.append(machines_bool)
-            #print('machines', machines)
             
         parts[3] = parts[3].replace(")", "").replace("\n", "")
 
@@ -72,30 +66,9 @@ def parse_input(input_file):
                     # change the total time that each resource is used
                     total_resource_time[i] += duration
             required_resources.append(resources_bool)
-            #print('resources', resources)
         i += 1
-
-    # order the machines to get a priority list
-    for t in range(num_tests):
-        for m in range(num_machines):
-            if machine_eligible[t][m]:
-                machine_avg_duration[m] += (durations[t] / sum(machine_eligible[t]))
-    # create a list of machines ordered by average duration
-    machines_ordered = [i+1 for i in range(num_machines)]
-    # crescent order
-    machines_ordered.sort(key=lambda x: machine_avg_duration[x-1])
-
-    resource_usage_test = [0 for i in range(num_tests)]
-    for t in range(num_tests):
-        for r in range(num_resources):
-            if required_resources[t][r]:
-                if total_resource_time[r] > resource_usage_test[t]:
-                    resource_usage_test[t] = total_resource_time[r]
         
-
-    # order the tests to get a priority list
-
-    return num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, resource_usage_test
+    return num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration
 
 def write_output(output_file, makespan, start_times, assigned_machines, num_machines, num_tests, required_resources):
 
@@ -126,11 +99,22 @@ def write_output(output_file, makespan, start_times, assigned_machines, num_mach
                     file.write(", ")
             file.write("])\n")
 
-def find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, machines_ordered):
+def find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources):
+
+    # create a list of the machines by least problematic to most problematic
+    machines_estimated_time = [0 for i in range(num_machines)]
+    for i in range(num_tests):
+        count_available_machines = machine_eligible[i].count(True)
+        for m in range(num_machines):
+            if machine_eligible[i][m]:
+                machines_estimated_time[m] += (durations[i] / count_available_machines)
+    
+    machines_ordered = [i+1 for i in range(num_machines)]
+    machines_ordered.sort(key=lambda x: machines_estimated_time[x-1])
+
 
     # compute the sum of all the durations
     sum_durations = sum(durations)
-
     # create a matrix machine usage that is num_machines x sum_durations. every element is 0 at the start
     machine_usage = [[False for i in range(sum_durations)] for j in range(num_machines)]
 
@@ -148,37 +132,42 @@ def find_max_makespan(num_tests, num_machines, num_resources, durations, machine
                 for j in range(durations[test]):
                     resource_usage[i][start_time + j] = True
 
-    def find_smallest_gap_for_test(test, machines_ordered):
+    def find_smallest_gap_for_test(test, machines_ordered, max_end_time):
         # find the smallest gap in the machine_usage matrix for the test
-        smallest_gap = -1
+        smallest_gap = sum_durations
         gap_type = 1 # 0 if the gap is in the middle of other tests, 1 if the gap is at the end of the tests
         start_time = sum_durations
         machine = -1
+        resources_required = [r for r in range(num_resources) if required_resources[test][r]]
         for m in machines_ordered:
             if not machine_eligible[test][m]:
                 continue
             t = 0
-            while t < sum_durations:
+            while t <= max_end_time:
+                if gap_type == 0:
+                    break
                 # skip if the machine already has a test running or at least one of the resources required for this test is being used
-                if machine_usage[m][t] or any([resource_usage[r][t] for r in range(num_resources) if required_resources[test][r]]):
+                if machine_usage[m][t] or any([resource_usage[r][t] for r in resources_required]):
                     t += 1
                     continue
                 # find the gap
                 gap = 0
-                while t < sum_durations and not machine_usage[m][t] and not any([resource_usage[r][t] for r in range(num_resources) if required_resources[test][r]]):
+                while t < max_end_time and not machine_usage[m][t] and not any([resource_usage[r][t] for r in resources_required]):
                     gap += 1
                     t += 1
-                if t == sum_durations:
-                    if gap >= durations[test] and gap > smallest_gap and gap_type == 1:
-                        smallest_gap = gap
+                if t == max_end_time:
+                    if gap_type == 1 and t - gap < start_time:
                         start_time = t - gap
                         machine = m
+                        max_end_time = start_time + durations[test]
+                    break
                 else:
                     if gap >= durations[test] and (gap_type == 1 or gap < smallest_gap or smallest_gap == -1):
                         smallest_gap = gap
                         start_time = t - gap
                         machine = m
                         gap_type = 0
+                    
         return machine, start_time
     
     # for each test, find the smallest gap or the gap with the smallest start time and introduce the test in
@@ -197,20 +186,18 @@ def find_max_makespan(num_tests, num_machines, num_resources, durations, machine
     tests_no_constraints.sort(key=lambda x: durations[x], reverse=True)
 
     tests = tests_with_resources + tests_with_machines + tests_no_constraints
-    tests_print = [i + 1 for i in tests]
-    print("tests", tests_print)
 
     start_times = [0 for i in range(num_tests)]
     assigned_machines = [0 for i in range(num_tests)]
     ordered_machines = [i - 1 for i in machines_ordered]
-    print("ordered_machines", machines_ordered)
+    max_end_time = 0
     for test in tests:
-        machine, start_time = find_smallest_gap_for_test(test, ordered_machines)
+        machine, start_time = find_smallest_gap_for_test(test, ordered_machines, max_end_time)
+        if start_time + durations[test] > max_end_time:
+            max_end_time = start_time + durations[test]
         introduce_test_in_machine(test, machine, start_time)
         start_times[test] = start_time
         assigned_machines[test] = machine + 1
-    #print("start_times", start_times)
-    #print("assigned_machines", assigned_machines)
 
 
     # find the maximum makespan
@@ -224,7 +211,7 @@ def find_max_makespan(num_tests, num_machines, num_resources, durations, machine
 
     return makespan, start_times, assigned_machines
 
-def find_min_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources):
+def find_min_makespan(num_tests, num_machines, num_resources, durations, required_machines, required_resources):
 
     # for all resources, sum the durations of the tests that require that resource
     resource_durations = [0 for i in range(num_resources)]
@@ -232,9 +219,40 @@ def find_min_makespan(num_tests, num_machines, num_resources, durations, machine
         for j in range(num_resources):
             if required_resources[i][j]:
                 resource_durations[j] += durations[i]
+
+    sum_durations = sum(durations)
+    #divide the sum of the durations by the number of machines
+    avg_duration = math.ceil(sum_durations / num_machines)
     max_resources = max(resource_durations)
-    return max(max_resources, math.ceil(sum(durations) / num_machines))
-    
+
+    min_makespan = max(avg_duration, max_resources)
+
+    # order tests by the number of machines they can run on, tests that can run in less machines first
+    tests_ordered_machines = [i+1 for i in range(num_tests) if not all(required_machines[i])]
+    tests_ordered_machines.sort(key=lambda x: required_machines[x-1].count(True))
+
+    # order tests by their duration, tests that take more time first
+    tests_ordered_no_machines = [i+1 for i in range(num_tests) if all(required_machines[i])]
+    tests_ordered_no_machines.sort(key=lambda x: durations[x-1])
+
+    tests_ordered = tests_ordered_machines + tests_ordered_no_machines
+
+
+    #min_makespan_aux = find_min_makespan_aux(num_tests, num_machines, durations, required_machines, min_makespan, max_makespan, tests_ordered)
+    min_makespan_aux = min_makespan
+    if avg_duration > max_resources and avg_duration >= min_makespan_aux:
+        print("AVERAGE DURATION IS THE BEST OPTION")
+    elif max_resources > avg_duration and max_resources >= min_makespan_aux:
+        print("MAX RESOURCES IS THE BEST OPTION")
+    else:
+        print("MINIZINC IS THE WAY TO GO")
+    print("max_resources", max_resources)
+    print("avg_duration", avg_duration)
+    print("min_makespan_aux", min_makespan_aux)
+
+    return max(min_makespan, min_makespan_aux)
+
+
 def assign_obvious_machines(machine_eligible, num_tests):
     assigned_machines = [0 for i in range(num_tests)]
     for i in range(num_tests):
@@ -242,56 +260,118 @@ def assign_obvious_machines(machine_eligible, num_tests):
             assigned_machines[i] = machine_eligible[i].index(True) + 1
     return assigned_machines
 
-def binary_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines):
-    # binary search for the best makespan
-    print("BINARY SEARCH")
-    print("min test duration", min_test_duration)
-    left = min_makespan
-    right = max_makespan
-    while left < right:
-        mid = (left + right) // 2
-        print(f"Currently trying with the value {mid}")
-        # Create an instance of the model
-        model = Model("proj_satisfy.mzn")
-        solver = Solver.lookup(SOLVER)
+def get_resource_usage(num_tests, num_resources, required_resources):
+    """the following code is used to obtain lists of tests that use exactly the same resource,
+    with also an extra list which serves as an index for each resource, to allow the minizinc model
+    to access the tests that use the same resources in a more efficient way"""
 
-        # Create an instance of the model
-        instance = Instance(solver, model)
-        instance["num_tests"] = num_tests
-        instance["num_machines"] = num_machines
-        instance["num_resources"] = num_resources
-        instance["durations"] = durations
-        instance["required_machines"] = machine_eligible
-        instance["required_resources"] = required_resources
-        instance["target_makespan"] = mid
-        instance["min_test_duration"] = min_test_duration
-        instance["machines_ordered"] = set(machines_ordered)
-        instance["tests_ordered"] = set(tests_ordered)
-        instance["hardcoded_machines"] = hardcoded_machines
-        #instance["initial_assigned_machines"] = assigned_machines
-        #instance["initial_start_times"] = start_times
+    # required_resources_updated is a new required_resources with everything the same, but different pointer
+    # we will use it to remove unused resources
+    required_resources_updated = [[required_resources[i][j] for j in range(num_resources)] for i in range(num_tests)]
+    num_resources_updated = num_resources
+    resource_usage = [0 for i in range(num_resources_updated)]
+    for i in range(num_tests):
+        for j in range(num_resources_updated):
+            if required_resources_updated[i][j]:
+                resource_usage[j] += 1
 
+    for index, res in enumerate(resource_usage):
+        if res == 0:
+            num_resources_updated -= 1
+            resource_usage.pop(index)
+            # remove the column of the required resources matrix
+            for i in range(num_tests):
+                required_resources_updated[i].pop(index)
+    resource_splits = []
+    resource_splits.append(1)
+    for i in range(num_resources_updated):
+        resource_splits.append(resource_usage[i] + resource_splits[i])
 
-        result = instance.solve(timeout=TIME_LIMIT)
-        # Check if there is a valid solution
-        if result.status.has_solution():
-            print(result)
-            write_output(output_file, mid, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
-            print(f"Current best solution: {mid}")
-            right = mid
-        else:
-            print("No solution found or inconsistency in the model.")
-            print(f"Status: {result.status}")  # This will give more details on what went wrong
-            left = mid + 1
-    if not result.status.has_solution():
-        single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, left, right, assigned_machines, start_times, hardcoded_machines)
+    tests_ordered_by_resource_ids = []
+    for r in range(num_resources_updated):
+        for t in range(num_tests):
+            if required_resources_updated[t][r]:
+                tests_ordered_by_resource_ids.append(t+1)
+    return resource_splits, tests_ordered_by_resource_ids, required_resources_updated, num_resources_updated
 
 
+def get_identical_resource_tests(num_tests, num_resources, required_resources):
+    """the following code is used to create the list of tests that use exactly the same resources,
+    for quicker access to these tests inside the minizinc model"""
+    resource_dict = {}
+    for t in range(num_tests):
+        res_tuple = tuple([i + 1 for i in range(num_resources) if required_resources[t][i]])
+        resource_dict[res_tuple] = resource_dict.get(res_tuple, ()) + (t + 1,)
+    tests_with_same_resources = []
+    tests_with_same_resources_lists = []
+    tests_with_same_resources_splits = []
+    tests_with_same_resources_splits.append(1)
+    for key in resource_dict:
+        tests_with_same_resources_lists += [resource_dict[key]]
+        if len(resource_dict[key]) > 1 and len(key) > 0:
+            tests_with_same_resources += [el for el in resource_dict[key]]
+            tests_with_same_resources_splits.append(len(resource_dict[key]) + tests_with_same_resources_splits[-1])
+    tests_with_same_resources += [el for el in resource_dict[()]]
+    tests_with_same_resources_splits.append(len(resource_dict[()]) + tests_with_same_resources_splits[-1])
+    num_tests_with_same_resources_splits = len(tests_with_same_resources_splits) - 1
+    num_tests_with_same_resources = len(tests_with_same_resources)
 
-def single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines):
+    return tests_with_same_resources, tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits
+
+
+def check_equal_tests(num_tests, num_machines, num_resources, machine_eligible, required_resources, durations):
+    count = 0
+    equal_tests = []
+    for i in range(num_tests):
+        for j in range(i+1, num_tests):
+            if all([machine_eligible[i][m] == machine_eligible[j][m] for m in range(num_machines)]) and all([required_resources[i][r] == required_resources[j][r] for r in range(num_resources)]) and durations[i] == durations[j]:
+                print(f"test {i+1} and test {j+1} are equal")
+                equal_tests.append((i+1, j+1))
+                count += 1
+    print(f"Number of equal tests: {count}")
+    return equal_tests, len(equal_tests)
+
+
+def check_equal_machines(num_tests, num_machines, machine_eligible):
     
-    print(f"Currently trying with the value {min_makespan}")
+    parallelizable_machines = [] # list of lists
 
+    parallelizable_machines.append([i for i in range(num_machines)])
+
+    for i in range(num_tests):
+        new_parallelizable_machines = []
+        for parallel_set in parallelizable_machines:
+            can_run_list = []
+            cant_run_list = []
+            for m in parallel_set:
+                if machine_eligible[i][m]:
+                    can_run_list.append(m)
+                else:
+                    cant_run_list.append(m)
+            if len(can_run_list) > 0:
+                new_parallelizable_machines.append(can_run_list)
+            if len(cant_run_list) > 0:
+                new_parallelizable_machines.append(cant_run_list)
+        parallelizable_machines = new_parallelizable_machines
+
+    i = 0
+    equal_machines = []
+    for parallel_set in parallelizable_machines:
+        if len(parallel_set) > 1:
+            i += 1
+            print(f"parallelizable machines {i}: ", [k+1 for k in parallel_set])
+    for parallel_set in parallelizable_machines:
+        if len(parallel_set) > 1:
+            for i in range(len(parallel_set) - 1):
+                equal_machines.append((parallel_set[i]+1, parallel_set[i+1]+1))
+    return equal_machines, len(equal_machines)
+
+def create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, target_makespan,
+                                  min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                  resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                  tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines):
+    
     model = Model("proj_satisfy.mzn")
     solver = Solver.lookup(SOLVER)
 
@@ -303,86 +383,114 @@ def single_search(num_tests, num_machines, num_resources, durations, machine_eli
     instance["durations"] = durations
     instance["required_machines"] = machine_eligible
     instance["required_resources"] = required_resources
-    instance["target_makespan"] = min_makespan
+    instance["target_makespan"] = target_makespan
     instance["min_test_duration"] = min_test_duration
-    instance["machines_ordered"] = set(machines_ordered)
-    instance["tests_ordered"] = set(tests_ordered)
     instance["hardcoded_machines"] = hardcoded_machines
-    instance["initial_assigned_machines"] = assigned_machines
-    instance["initial_start_times"] = start_times
+    instance["initial_assigned_machines"] = initial_assigned_machines
+    instance["initial_start_times"] = initial_start_times
 
-    result = instance.solve(timeout=TIME_LIMIT)
+    instance["resource_splits"] = resource_splits
+    instance["total_resources_num"] = total_resources_num
+    instance["tests_ordered_by_resource_ids"] = tests_ordered_by_resource_ids
+
+    instance["tests_with_same_resources"] = tests_with_same_resources
+    instance["tests_with_same_resources_splits"] = tests_with_same_resources_splits
+    instance["num_tests_with_same_resources"] = num_tests_with_same_resources
+    instance["num_tests_with_same_resources_splits"] = num_tests_with_same_resources_splits
+
+    instance["num_eq_tests"] = num_eq_tests
+    instance["eq_tests"] = eq_tests
+    instance["num_eq_machines"] = num_eq_machines
+    instance["eq_machines"] = eq_machines
+
+    print("Currently tring to solve the model with makespan: ", target_makespan)
+    start_time = time()
+    result = instance.solve()
+    end_time = time()
+    print(f"Time taken: {end_time - start_time}")
 
     if result.status.has_solution():
         print(result)
-        write_output(output_file, min_makespan, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
-        print(f"Current best solution: {min_makespan}")
+        write_output(output_file, target_makespan, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
+        print(f"Current best solution: {target_makespan}")
+        return True
     else:
-        print("No solution found or inconsistency in the model.")
-        print(f"Status: {result.status}")  # This will give more details on what went wrong
+        print(f"Status: {result.status}")  # This will give more details on what went wrong"""
+        return False
+
+
+def binary_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_makespan, max_makespan,
+                                  min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                  resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                  tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines):
+    
+    # start by running the minizinc model with the max makespan, to get a solution
+    found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, max_makespan,
+                                    min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                    resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                    tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+    if found_solution:
+        best_result = max_makespan
+    else:
+        best_result = -1
+
+    # start the binary search
+    left = min_makespan
+    right = max_makespan
+    while left < right:
+        mid = (left + right) // 2
+        found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, mid,
+                                    min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                    resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                    tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+        if found_solution:
+            right = mid
+            best_result = mid
+        else:
+            left = mid + 1
+    if best_result != left:
+        found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, left,
+                                    min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                    resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                    tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+        if found_solution:
+            best_result = left
+    print("Final solution found: ", best_result)
+
+                    
+
 
 def main(input_file, output_file):
-    # Load the model
-    model = Model("proj.mzn")
-    solver = Solver.lookup("chuffed")  # Or any other solver you are using
 
-    # Parse the input file (as you've done before)
-    num_tests, num_machines, num_resources, tests, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, resource_usage_test = parse_input(input_file)
+    # Parse the input file
+    num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration = parse_input(input_file)
 
+    eq_tests, len_eq_tests = check_equal_tests(num_tests, num_machines, num_resources, machine_eligible, required_resources, durations)
+    eq_machines, len_eq_machines = check_equal_machines(num_tests, num_machines, machine_eligible)
+
+    max_makespan, start_times, assigned_machines = find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources)
     min_makespan = find_min_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources)
-    max_makespan, start_times, assigned_machines = find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, machines_ordered)
     print('min_makespan', min_makespan)
     print('max_makespan', max_makespan)
 
-    tests_weights = [0 for i in range(num_tests)]
-    for t in range(num_tests):
-        tests_weights[t] = ((0.8 * resource_usage_test[t] / max_makespan) + 0.2) * durations[t]
-
-    tests_ordered = [i+1 for i in range(num_tests)]
-    # sort with tests with larger weights first
-    tests_ordered.sort(key=lambda x: tests_weights[x-1], reverse=True)
-    print("machines ordered:\n", machines_ordered)
-    print("tests ordered:\n", tests_ordered)
-    print("initial_assigned_machines: ", assigned_machines)
-    print("initial_start_times: ", start_times)
-
     # unmodifiable machines
     hardcoded_machines = assign_obvious_machines(machine_eligible, num_tests)
-    
-    """if(min_makespan < max_makespan):
-        binary_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines)
-    else:
-        single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, min_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines)
-""" 
 
-    single_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration, machines_ordered, tests_ordered, max_makespan, max_makespan, assigned_machines, start_times, hardcoded_machines)
-"""
-    # Create an instance of the model
-    instance = Instance(solver, model)
-    instance["num_tests"] = num_tests
-    instance["num_machines"] = num_machines
-    instance["num_resources"] = num_resources
-    instance["durations"] = durations
-    instance["required_machines"] = machine_eligible
-    instance["required_resources"] = required_resources
-    instance["min_makespan"] = min_makespan
-    instance["max_makespan"] = max_makespan
-    instance["min_test_duration"] = min_test_duration
-    instance["machines_ordered"] = set(machines_ordered)
-    instance["tests_ordered"] = set(tests_ordered)
-    instance["hardcoded_machines"] = hardcoded_machines
-    instance["initial_assigned_machines"] = assigned_machines
-    instance["initial_start_times"] = start_times
+    # obtain the list of tests that share one resource, plus list to allow quicker access for each resource
+    resource_splits, tests_ordered_by_resource_ids, required_resources_updated, num_resources_updated = get_resource_usage(num_tests, num_resources, required_resources)
 
+    # obtain the list of tests that share exactly the same resources, plus a list to allow quicker access for each group of tests
+    tests_with_same_resources, tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits = get_identical_resource_tests(num_tests, num_resources, required_resources)
 
-    result = instance.solve()
-    # Check if there is a valid solution
-    if result.status.has_solution():
-        print(result)
-        write_output(output_file, result["objective"], result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
-    else:
-        print("No solution found or inconsistency in the model.")
-        print(f"Status: {result.status}")  # This will give more details on what went wrong"""
+    binary_search(num_tests=num_tests, num_machines=num_machines, num_resources=num_resources_updated, durations=durations, machine_eligible=machine_eligible, required_resources=required_resources_updated, min_makespan=min_makespan, max_makespan=max_makespan,
+                                  min_test_duration=min_test_duration, hardcoded_machines=hardcoded_machines, initial_assigned_machines=assigned_machines, initial_start_times=start_times,
+                                  resource_splits=resource_splits, total_resources_num=len(tests_ordered_by_resource_ids), tests_ordered_by_resource_ids=tests_ordered_by_resource_ids, tests_with_same_resources=tests_with_same_resources,
+                                  tests_with_same_resources_splits=tests_with_same_resources_splits, num_tests_with_same_resources=num_tests_with_same_resources, num_tests_with_same_resources_splits=num_tests_with_same_resources_splits,
+                                  eq_tests=eq_tests, num_eq_tests=len_eq_tests, eq_machines=eq_machines, num_eq_machines=len_eq_machines) 
 
 
 if __name__ == "__main__":

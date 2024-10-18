@@ -9,23 +9,14 @@ int:num_eq_machines;
 int:num_eq_tests;
 int:num_tests_with_same_resources;
 int:num_tests_with_same_resources_splits;
-int: num_problematic_resource_tests;
-int: num_problematic_machine_tests;
 
 array[1..num_tests] of int: durations;
 array[1..num_tests, 1..num_machines] of bool: required_machines;
 array[1..num_tests, 1..num_resources] of bool: required_resources;
 
-%set of int: machines_ordered;  % Specific order of machines
-%set of int: tests_ordered;  % Specific order of tests
-
 array[1..num_eq_machines, 1..2] of int: eq_machines;
 array[1..num_eq_tests, 1..2] of int: eq_tests;
 
-
-% more problematic tests
-%array[1..num_problematic_resource_tests] of int: problematic_resource_tests;
-%array[1..num_problematic_machine_tests] of int: problematic_machine_tests;
 
 array[1..num_tests_with_same_resources_splits + 1] of int: tests_with_same_resources_splits;
 array[1..num_tests_with_same_resources] of int: tests_with_same_resources;
@@ -40,6 +31,7 @@ array[1..total_resources_num] of var int: tests_ordered_by_resource_ids;
 
 % hardcoded arrays
 array[1..num_tests] of 0..num_machines: hardcoded_machines;
+
 % warm-start
 %array[1..num_tests] of 1..num_machines: initial_assigned_machines;
 %array[1..num_tests] of 0..target_makespan - min_test_duration: initial_start_times;
@@ -184,29 +176,7 @@ constraint forall(t in 1..num_tests)(
     )
 );
 
-% NOT WORKING
-% forall tests t that have a set of resources s, if there is a test t2 which has a subset of s, then t2 should start after t
-/*constraint forall(split in 1..num_resources)(
-    forall(i,j in resource_splits[split]..resource_splits[split+1] - 1 where i!=j)(
-        let {
-            var int: t1 = tests_ordered_by_resource_ids[i];
-            var int: t2 = tests_ordered_by_resource_ids[j];
-        } in
-        if (forall(r in 1..num_resources where required_resources[t2,r])(
-            required_resources[t1,r]
-        ) /\
-        exists(r in 1..num_resources where required_resources[t1, r])(
-            not required_resources[t2, r]
-        )
-        ) then
-            start_times[t1] < start_times[t2]
-        else
-            true
-        endif
-    )
-);*/
-
-% for all tests that have EXACTLY the same set of resources, they must start one after the other
+% tests that use exactly the same resources must appear one after the other
 constraint forall(split in 1..num_tests_with_same_resources_splits - 1)(
     forall(i in tests_with_same_resources_splits[split]..tests_with_same_resources_splits[split + 1] - 1)(
         let {
@@ -214,6 +184,9 @@ constraint forall(split in 1..num_tests_with_same_resources_splits - 1)(
         } in
         start_times[t] == 0 \/
         end_times[t] == target_makespan \/
+        forall(j in tests_with_same_resources_splits[split]..tests_with_same_resources_splits[split + 1] - 1 where j != i)(
+            start_times[t] < start_times[tests_with_same_resources[j]]
+        ) \/
         exists(j in tests_with_same_resources_splits[split]..tests_with_same_resources_splits[split + 1] - 1 where j != i)(
             start_times[t] == end_times[tests_with_same_resources[j]] \/
             start_times[tests_with_same_resources[j]] == end_times[t]
@@ -221,44 +194,8 @@ constraint forall(split in 1..num_tests_with_same_resources_splits - 1)(
     )
 );
 
-% the objective of this this constraint is to try to reduce the search space by forcing tests that use the same resource
-% to be used in the same machine as the tests with common resources that finish right before them.
-constraint forall(r in 1..num_resources)(
-    forall(i in resource_splits[r]..resource_splits[r+1] - 1)(
-        let {
-            var int: t1 = tests_ordered_by_resource_ids[i];
-        } in
-        start_times[t1] == 0 \/
-        end_times[t1] == target_makespan \/
-        exists(j in resource_splits[r]..resource_splits[r+1] - 1 where j != i)(
-            let {
-                var int: t2 = tests_ordered_by_resource_ids[j];
-            } in
-            (start_times[t1] == end_times[t2]) /\
-            assigned_machines[t1] == assigned_machines[t2]
-        ) \/
-        exists( j in 1..num_resources where j != r /\ required_resources[t1, j])(
-            exists(k in resource_splits[j]..resource_splits[j+1] - 1)(
-                let {
-                    var int: t2 = tests_ordered_by_resource_ids[k];
-                } in
-                (start_times[t1] == end_times[t2]) /\
-                assigned_machines[t1] == assigned_machines[t2]
-            )
-        ) \/
-        forall(j in 1..total_resources_num where tests_ordered_by_resource_ids[j] != t1)(
-            let {
-                var int: t2 = tests_ordered_by_resource_ids[j];
-            } in
-            end_times[t2] != start_times[t1] \/
-            forall(k in 1..num_machines)(
-                required_machines[t1, assigned_machines[t2]] == false
-            )
-        )
-    )
-);
-% for all tests that have exactly the same resources (including tests that have no resources), if they start one after the other, 
-% and in the same machine, then their position is fixed in relation to each other.
+% tests that use exactly the same set of resources, including tests which don't use any resources at all,
+% if running on the same machine, must be ordered by start time
 constraint forall(split in 1..num_tests_with_same_resources_splits)(
     forall(i in tests_with_same_resources_splits[split]..tests_with_same_resources_splits[split + 1] - 2,
     j in i+1..tests_with_same_resources_splits[split] - 1)(
@@ -277,189 +214,3 @@ constraint forall(split in 1..num_tests_with_same_resources_splits)(
 );
 
 solve satisfy;
-% tests with same resources must appear right after each other
-
-% for all tests that need a resource r, they must start in the same machine of the previous test if possible
-
-
-% if a test starts at a machine, it starts close to another test that uses the same machine
-
-
-
-
-% a test that uses a resource must start
-
-/*
-constraint forall (split in 1..num_resources)(
-    forall(i,j in resource_splits[split]..resource_splits[split + 1] - 1 where i!=j)(
-        let {
-            var int: t1 = tests_ordered_by_resource_ids[i];
-            var int: t2 = tests_ordered_by_resource_ids[j];
-        } in
-        if (forall(r in 1..num_resources where required_resources[t2,r])(
-            required_resources[t1,r]
-        ) /\
-        exists(r in 1..num_resources where required_resources[t1, r])(
-            not required_resources[t2, r]
-        )
-        ) then
-            let {
-                var int: average_t1 = start_times[t1] + (durations[t1] div 2);
-                var int: average_t2 = start_times[t2] + (durations[t2] div 2);
-                var int: half_makespan = target_makespan div 2;
-            } in
-            (average_t1 > half_makespan /\ average_t2 < half_makespan) \/
-            (average_t1 < half_makespan /\ average_t2 > half_makespan) \/
-            (average_t1 > half_makespan /\ average_t2 > half_makespan /\ average_t1 > average_t2) \/
-            (average_t1 < half_makespan /\ average_t2 < half_makespan /\ average_t1 < average_t2)
-        else
-            true
-        endif
-    )
-);*/
-
-
-
-%:: warm_start( start_times, initial_start_times)
-%:: warm_start( assigned_machines, initial_assigned_machines)
-%::int_search(start_times, most_constrained, indomain_min)
-
-% do a priority search, using input_order
-%::priority_search([tests_ordered[i] | i in 1..num_tests], assigned_machines, input_order, indomain_min)
-%output[show(tests_ordered_by_resource)];  % Output the tests ordered by machine and start time
-/*constraint forall(m in 1..num_machines)(
-    (exists(i in 1..num_tests where assigned_machines[i] == m)(
-        end_times[i] == target_makespan
-    ) /\
-    exists(i in 1..num_tests where assigned_machines[i] == m)(
-        start_times[i] == 0
-    )) \/
-    forall(i in 1..num_tests)(
-        not required_machines[i, m] \/
-        (exists(r in 1..num_resources where required_resources[i, r])(
-            exists(j in 1..num_tests where j != i /\ required_resources[j, r])(
-                end_times[j] == target_makespan
-            )
-        ) /\
-        exists(r in 1..num_resources where required_resources[i, r])(
-            exists(j in 1..num_tests where j != i /\ required_resources[j, r])(
-                start_times[j] == 0
-            )
-        ))
-
-    ) \/
-    (exists(i in 1..num_tests where assigned_machines[i] == m)(
-        end_times[i] < target_makespan /\
-        exists(r in 1..num_resources where required_resources[i, r])(
-            exists(j in 1..num_tests where j != i /\ required_resources[j, r])(
-                end_times[j] == target_makespan /\ end_times[i] == target_makespan - durations[j]
-            )
-        )
-    ) /\
-    exists(i in 1..num_tests where assigned_machines[i] == m)(
-        start_times[i] > 0 /\
-        exists(r in 1..num_resources where required_resources[i, r])(
-            exists(j in 1..num_tests where j != i /\ required_resources[j, r])(
-                start_times[j] == 0 /\ start_times[i] == durations[j]
-            )
-        )
-    )
-    )
-
-);*/
-
-/*constraint exists(i in 1..num_tests)(
-    start_times[i] == 0 /\
-    exists(r in 1..num_resources) (required_resources[i, r])
-);
-constraint exists(i in 1..num_tests)(
-    end_times[i] == target_makespan /\
-    exists(r in 1..num_resources) (required_resources[i, r])
-);*/
-
-/*constraint forall(i in 1..num_tests)(
-    start_times[i] == 0 \/
-    exists(j in 1..num_tests)(
-        start_times[i] == end_times[j]
-    )
-);*/
-% Prevent overlapping of resource usage
-/*constraint forall(r in 1..num_resources)(
-    forall(i in resource_splits[r]..resource_splits[r+1] - 2)(
-        start_times[tests_ordered_by_resource[i]] + durations[tests_ordered_by_resource[i]] <= start_times[tests_ordered_by_resource[i+1]]
-    )
-);*/
-/*constraint forall(m in 1..num_machines)(
-    exists(i in 1..num_tests where assigned_machines[i] == m)(
-        end_times[i] == target_makespan
-    ) \/
-    forall(i in 1..num_tests)(
-        end_times[i] == target_makespan \/ not required_machines[i, m] \/
-        exists(r in 1..num_resources where required_resources[i, r])(
-            exists(j in 1..num_tests where j != i /\ required_resources[j, r])(
-                start_times[j] + durations[j] < target_makespan - durations[i]
-            )
-        )
-    ) \/
-    exists (i in 1..num_tests)(
-        end_times[i] < target_makespan /\
-        assigned_machines[i] == m /\
-        exists(r in 1..num_resources where required_resources[i, r])(
-            exists(j in 1..num_tests where j != i /\ required_resources[j, r])(
-                end_times[j] == target_makespan /\ end_times[i] == target_makespan - durations[j]
-            )
-        )
-    )
-);*/
-/*constraint forall(m in 1..num_machines)(
-    forall (t1 in 1..num_tests where assigned_machines[t1] == m)(
-        % either all tests are already assigned by the time t1 finishes
-        forall (t2 in 1..num_tests where t2 > t1)(
-            start_times[t2] <= start_times[t1] + durations[t1]
-        ) \/
-        % or the next test starts immediately after t1 finishes in the same machine
-        exists(t2 in 1..num_tests where t1 > t2 /\ assigned_machines[t2] == m)(
-            start_times[t2] == start_times[t1] + durations[t1]
-        ) \/
-        % or there are no tests that can be assigned to the machine
-        forall(t2 in 1..num_tests where t2 > t1)(
-            start_times[t2] < start_times[t1] + durations[t1] \/
-            not required_machines[t2, m] \/
-            exists(r in 1..num_resources where required_resources[t2, r])(
-                exists(t3 in 1..num_tests where t3 > t2 /\ required_resources[t3,r])(
-                    (start_times[t3] <= start_times[t2] /\ start_times[t2]<start_times[t3] + durations[t3]) \/
-                    (start_times[t2] < start_times[t3] /\ start_times[t3] < start_times[t2] + durations[t2])
-                )
-            )
-        ) \/
-        % or there is a test t2 starting which uses a resource r that is being used by another test t3 already running when t1 finishes
-        % and t2 is assigned to this machine when t3 finishes
-        exists(t2 in 1..num_tests)(
-            start_times[t2] > start_times[t1] + durations[t1] /\
-            assigned_machines[t2] == m /\
-            exists(r in 1..num_resources where required_resources[t2, r])(
-                exists(t3 in 1..num_tests where t3 != t2 /\ required_resources[t3,r])(
-                    start_times[t3] <= start_times[t2] /\ start_times[t2] < start_times[t3] + durations[t3] /\
-                    start_times[t2] == start_times[t3] + durations[t3]
-                )
-            )
-        )
-    )
-);*/
-/*array[1..num_machines + 1] of var 1..num_tests + 1: machine_splits = 
-    [ if m == 1 then 1 else 1 + count([assigned_machines[t] <= m-1 | t in 1..num_tests]) endif | m in 1..num_machines+1];
-array[1..num_tests] of var 1..num_tests: tests_ordered_by_machine =
-arg_sort([assigned_machines[t] * target_makespan + start_times[t] | t in 1..num_tests]);
-
-array[1..total_resources_num] of int: tests_ordered_by_resource_ids;
-array[1..total_resources_num] of var int: tests_ordered_by_resource_aux =
-sort([ ((tests_ordered_by_resource_ids[id] div target_makespan) * target_makespan + start_times[tests_ordered_by_resource_ids[id] mod target_makespan]) * 1000 + tests_ordered_by_resource_ids[id] mod target_makespan | id in 1..total_resources_num]);
-array[1..total_resources_num] of var 1..num_tests: tests_ordered_by_resource =
-[tests_ordered_by_resource_aux[id] mod 1000 | id in 1..total_resources_num];*/
-
-% Prevent overlapping of tests on the same machine
-/*constraint forall (m in 1..num_machines)(
-    forall(i in machine_splits[m]..machine_splits[m+1] - 2)(
-        start_times[tests_ordered_by_machine[i]] + durations[tests_ordered_by_machine[i]] <= start_times[tests_ordered_by_machine[i+1]]
-    )
-);*/
