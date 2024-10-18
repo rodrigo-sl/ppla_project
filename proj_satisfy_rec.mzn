@@ -21,7 +21,6 @@ array[1..num_eq_tests, 1..2] of int: eq_tests;
 array[1..num_tests_with_same_resources_splits + 1] of int: tests_with_same_resources_splits;
 array[1..num_tests_with_same_resources] of int: tests_with_same_resources;
 
-array[1..num_tests] of int: resource_start_times;
 % Decision variables
 array[1..num_tests] of var 1..num_machines: assigned_machines; % Machine assigned to each test
 array[1..num_tests] of var 0..target_makespan - min_test_duration: start_times; % Start time for each test
@@ -46,14 +45,6 @@ constraint makespan <= target_makespan;
 % break symmetry between parallel machines, by ensuring that the first test of every machine has a lower index than the first test of the parallel machine
 constraint forall(i in 1..num_tests)(
     start_times[i] >= 0  % Ensure the test starts after time 0
-);
-
-constraint forall(i in 1..num_tests)(
-    if resource_start_times[i] >= 0 then
-        start_times[i] == resource_start_times[i]
-    else
-        true
-    endif
 );
 
 constraint forall(i in 1..num_tests)(
@@ -113,7 +104,7 @@ constraint forall(m in 1..num_machines)(
 % for a test to start in a machine, it must start close to another test that uses the same machine
 % the idea is to prevent one test from being scheduled in the middle of nowhere in a machine, forcing
 % it to be close to another test.
-/*constraint forall(t in 1..num_tests)(
+constraint forall(t in 1..num_tests)(
     start_times[t] == 0 \/
     end_times[t] == target_makespan \/
     % if its a test without resources must always start close to another test
@@ -128,8 +119,8 @@ constraint forall(m in 1..num_machines)(
             start_times[t] == end_times[tests_ordered_by_resource_ids[i]])
         )
     )
-);*/
-/*
+);
+
 % tests that use exactly the same resources must appear one after the other
 constraint forall(split in 1..num_tests_with_same_resources_splits - 1)(
     forall(i in tests_with_same_resources_splits[split]..tests_with_same_resources_splits[split + 1] - 1)(
@@ -147,7 +138,7 @@ constraint forall(split in 1..num_tests_with_same_resources_splits - 1)(
         )
     )
 );
-*/
+
 % tests that use exactly the same set of resources, including tests which don't use any resources at all,
 % if running on the same machine, must be ordered by start time
 constraint forall(split in 1..num_tests_with_same_resources_splits)(

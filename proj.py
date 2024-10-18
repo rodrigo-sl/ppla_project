@@ -250,7 +250,7 @@ def find_min_makespan(num_tests, num_machines, num_resources, durations, require
     print("avg_duration", avg_duration)
     print("min_makespan_aux", min_makespan_aux)
 
-    return max(min_makespan, min_makespan_aux)
+    return max(min_makespan, min_makespan_aux), max_resources
 
 
 def assign_obvious_machines(machine_eligible, num_tests):
@@ -271,17 +271,21 @@ def get_resource_usage(num_tests, num_resources, required_resources):
     num_resources_updated = num_resources
     resource_usage = [0 for i in range(num_resources_updated)]
     for i in range(num_tests):
-        for j in range(num_resources_updated):
+        for j in range(num_resources):
             if required_resources_updated[i][j]:
                 resource_usage[j] += 1
 
+    # start from the end of the list
+    index_list = []
     for index, res in enumerate(resource_usage):
         if res == 0:
+            index_list.append(index)
             num_resources_updated -= 1
-            resource_usage.pop(index)
             # remove the column of the required resources matrix
-            for i in range(num_tests):
-                required_resources_updated[i].pop(index)
+    resource_usage = [res for res in resource_usage if res > 0]
+    for i in range(num_tests):
+        for index in index_list[::-1]:
+            required_resources_updated[i].pop(index)
     resource_splits = []
     resource_splits.append(1)
     for i in range(num_resources_updated):
@@ -311,8 +315,9 @@ def get_identical_resource_tests(num_tests, num_resources, required_resources):
         if len(resource_dict[key]) > 1 and len(key) > 0:
             tests_with_same_resources += [el for el in resource_dict[key]]
             tests_with_same_resources_splits.append(len(resource_dict[key]) + tests_with_same_resources_splits[-1])
-    tests_with_same_resources += [el for el in resource_dict[()]]
-    tests_with_same_resources_splits.append(len(resource_dict[()]) + tests_with_same_resources_splits[-1])
+    if () in resource_dict:
+        tests_with_same_resources += [el for el in resource_dict[()]]
+        tests_with_same_resources_splits.append(len(resource_dict[()]) + tests_with_same_resources_splits[-1])
     num_tests_with_same_resources_splits = len(tests_with_same_resources_splits) - 1
     num_tests_with_same_resources = len(tests_with_same_resources)
 
@@ -370,7 +375,7 @@ def create_and_run_minizinc_model(num_tests, num_machines, num_resources, durati
                                   min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                   resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                   tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
-                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines):
+                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines, hardcoded_start_times):
     
     model = Model("proj_satisfy.mzn")
     solver = Solver.lookup(SOLVER)
@@ -388,6 +393,7 @@ def create_and_run_minizinc_model(num_tests, num_machines, num_resources, durati
     instance["hardcoded_machines"] = hardcoded_machines
     instance["initial_assigned_machines"] = initial_assigned_machines
     instance["initial_start_times"] = initial_start_times
+    instance["resource_start_times"] =  hardcoded_start_times
 
     instance["resource_splits"] = resource_splits
     instance["total_resources_num"] = total_resources_num
@@ -419,52 +425,252 @@ def create_and_run_minizinc_model(num_tests, num_machines, num_resources, durati
         return False
 
 
+def run_alternative_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, target_makespan,
+                                    min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                    resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                    tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines):
+        
+        model = Model("proj_satisfy_rec.mzn")
+        solver = Solver.lookup(SOLVER)
+    
+        # Create an instance of the model
+        instance = Instance(solver, model)
+        instance["num_tests"] = num_tests
+        instance["num_machines"] = num_machines
+        instance["num_resources"] = num_resources
+        instance["durations"] = durations
+        instance["required_machines"] = machine_eligible
+        instance["required_resources"] = required_resources
+        instance["target_makespan"] = target_makespan
+        instance["min_test_duration"] = min_test_duration
+        instance["hardcoded_machines"] = hardcoded_machines
+        instance["initial_assigned_machines"] = initial_assigned_machines
+        instance["initial_start_times"] = initial_start_times
+    
+        instance["resource_splits"] = resource_splits
+        instance["total_resources_num"] = total_resources_num
+        instance["tests_ordered_by_resource_ids"] = tests_ordered_by_resource_ids
+    
+        instance["tests_with_same_resources"] = tests_with_same_resources
+        instance["tests_with_same_resources_splits"] = tests_with_same_resources_splits
+        instance["num_tests_with_same_resources"] = num_tests_with_same_resources
+        instance["num_tests_with_same_resources_splits"] = num_tests_with_same_resources_splits
+    
+        instance["num_eq_tests"] = num_eq_tests
+        instance["eq_tests"] = eq_tests
+        instance["num_eq_machines"] = num_eq_machines
+        instance["eq_machines"] = eq_machines
+    
+        print("Currently tring to solve the alternative model")
+        start_time = time()
+        result = instance.solve()
+        end_time = time()
+        print(f"Time taken: {end_time - start_time}")
+    
+        if result.status.has_solution():
+            print(result)
+            write_output(output_file, target_makespan, result["start_times"], result["assigned_machines"], num_machines, num_tests, required_resources)
+            print(f"Current Best solution: {target_makespan}")
+            return True
+        else:
+            print(f"Status: {result.status}")  # This will give more details on what went wrong"""
+            return False
+
 def binary_search(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_makespan, max_makespan,
                                   min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                   resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                   tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
-                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines):
+                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines, hardcoded_start_times):
     
+    use_alternative_model = False
     # start by running the minizinc model with the max makespan, to get a solution
     found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, max_makespan,
                                     min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                     resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                     tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
-                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines, hardcoded_start_times)
     if found_solution:
         best_result = max_makespan
     else:
         best_result = -1
+        use_alternative_model = True
+        found_solution = run_alternative_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, max_makespan,
+                                  min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                  resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                  tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+        if found_solution:
+            best_result = max_makespan
+        else:
+            print("No solution found for the max makespan")
+            return
 
     # start the binary search
     left = min_makespan
     right = max_makespan
     while left < right:
         mid = (left + right) // 2
-        found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, mid,
+        if use_alternative_model:
+            found_solution = run_alternative_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, mid,
+                                  min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                  resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                  tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                  eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+        else:
+            found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, mid,
                                     min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                     resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                     tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
-                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+                                    eq_tests, num_eq_tests, eq_machines, num_eq_machines, hardcoded_start_times)
         if found_solution:
             right = mid
             best_result = mid
         else:
             left = mid + 1
     if best_result != left:
-        found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, left,
+        if use_alternative_model:
+            found_solution = run_alternative_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, left,
                                     min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
                                     resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
                                     tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
                                     eq_tests, num_eq_tests, eq_machines, num_eq_machines)
+        else:
+            found_solution = create_and_run_minizinc_model(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, left,
+                                        min_test_duration, hardcoded_machines, initial_assigned_machines, initial_start_times,
+                                        resource_splits, total_resources_num, tests_ordered_by_resource_ids, tests_with_same_resources,
+                                        tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits,
+                                        eq_tests, num_eq_tests, eq_machines, num_eq_machines, hardcoded_start_times)
         if found_solution:
             best_result = left
     print("Final solution found: ", best_result)
+
+def find_start_time_resources(num_tests, num_resources, durations, required_resources, min_makespan, max_makespan):
+    """runs an initial instance of minizinc to find the start times of tests that use resources"""
+
+    
+    """create a dictionary with the key being a tuple with all the resources used: each key will have two values,
+    the first is a list with the ids of all the tests with those same resources, the second is the total duration of those tests"""
+    resource_dict = {}
+    for t in range(num_tests):
+        res_tuple = tuple([i + 1 for i in range(num_resources) if required_resources[t][i]])
+        if len(res_tuple) == 0:
+            continue
+        resource_dict[res_tuple] = resource_dict.get(res_tuple, ([], 0))
+        resource_dict[res_tuple][0].append(t + 1)
+        resource_dict[res_tuple] = (resource_dict[res_tuple][0], resource_dict[res_tuple][1] + durations[t])
+    
+    """create a new required_resources table, but using the keys as being only one test"""
+    required_resources_groups = []
+    for key in resource_dict:
+        new_required_resources = []
+        for r in range(num_resources):
+            if r+1 in key:
+                new_required_resources.append(True)
+            else:
+                new_required_resources.append(False)
+        required_resources_groups.append(new_required_resources)
+    num_tests_groups = len(required_resources_groups)
+    durations_groups = [resource_dict[key][1] for key in resource_dict]
+            
+    priority_tests = []
+    changes = True
+    while changes:
+        changes = False
+        for t in range(len(resource_dict)):
+            if t + 1 in priority_tests:
+                continue
+            has_more_priority = True
+            for t2 in range(len(resource_dict)):
+                if t == t2 or t2 + 1 in priority_tests:
+                    continue
+                has_all_resources = True
+                for r in range(num_resources):
+                    if (not required_resources_groups[t][r]) and required_resources_groups[t2][r]:
+                        has_all_resources = False
+                        break
+                if not has_all_resources:
+                    has_more_priority = False
+                    break
+            if has_more_priority:
+                priority_tests.append(t + 1)
+                changes = True
+
+    start_times = []
+    resource_dict_list = list(resource_dict)
+    for el in priority_tests:
+        if len(start_times) == 0:
+            start_times.append(0)
+        else:
+            start_times.append(start_times[-1] + resource_dict[resource_dict_list[previous_el - 1]][1])
+        previous_el = el
+    hardcoded_start_times = []
+    for i in range(num_tests_groups):
+        if i+1 in priority_tests:
+            hardcoded_start_times.append(start_times[priority_tests.index(i+1)])
+        else:
+            hardcoded_start_times.append(-1)
+    resource_splits, tests_ordered_by_resource_ids, _, num_updated_resources = get_resource_usage(
+        num_tests_groups, num_resources, required_resources_groups)
+    
+
+
+
+    
+
+
+
+    model = Model("proj_start_times.mzn")
+    solver = Solver.lookup(SOLVER)
+
+    # Create an instance of the model
+    instance = Instance(solver, model)
+    instance["num_tests"] = num_tests_groups
+    instance["num_resources"] = num_updated_resources
+    instance["durations"] = durations_groups
+    instance["required_resources"] = required_resources_groups
+    instance["min_makespan"] = min_makespan
+    instance["max_makespan"] = max_makespan
+    instance["resource_splits"] = resource_splits
+    instance["total_resources_num"] = len(tests_ordered_by_resource_ids)
+    instance["tests_ordered_by_resource_ids"] = tests_ordered_by_resource_ids
+    instance["hardcoded_start_times"] = hardcoded_start_times
+
+    print("Currently tring to solve the model to find start times")
+    start_time = time()
+    result = instance.solve()
+    end_time = time()
+    print(f"Time taken: {end_time - start_time}")
+
+    if result.status.has_solution():
+        print(result)
+        objective = result["objective"]
+        start_times = result["start_times"]
+
+        """now go to the resource_dict and compute a new start time for each test, based on the start times of the groups"""
+        new_start_times = [-1 for i in range(num_tests)]
+        i = 0
+        for key in resource_dict:
+            start_time_group =  start_times[i]
+            start_time_list_group = []
+            for test in resource_dict[key][0]:
+                start_time_list_group.append(start_time_group)
+                start_time_group += durations[test - 1]
+            for j in range(len(resource_dict[key][0])):
+                new_start_times[resource_dict[key][0][j] - 1] = start_time_list_group[j]
+            i += 1
+        return objective, new_start_times
+
+    else:
+        print(f"Status: {result.status}")  # This will give more details on what went wrong"""
+        return None
+    
 
                     
 
 
 def main(input_file, output_file):
+
 
     # Parse the input file
     num_tests, num_machines, num_resources, durations, machine_eligible, required_resources, min_test_duration = parse_input(input_file)
@@ -473,7 +679,7 @@ def main(input_file, output_file):
     eq_machines, len_eq_machines = check_equal_machines(num_tests, num_machines, machine_eligible)
 
     max_makespan, start_times, assigned_machines = find_max_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources)
-    min_makespan = find_min_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources)
+    min_makespan, min_makespan_resources = find_min_makespan(num_tests, num_machines, num_resources, durations, machine_eligible, required_resources)
     print('min_makespan', min_makespan)
     print('max_makespan', max_makespan)
 
@@ -482,15 +688,18 @@ def main(input_file, output_file):
 
     # obtain the list of tests that share one resource, plus list to allow quicker access for each resource
     resource_splits, tests_ordered_by_resource_ids, required_resources_updated, num_resources_updated = get_resource_usage(num_tests, num_resources, required_resources)
-
     # obtain the list of tests that share exactly the same resources, plus a list to allow quicker access for each group of tests
     tests_with_same_resources, tests_with_same_resources_splits, num_tests_with_same_resources, num_tests_with_same_resources_splits = get_identical_resource_tests(num_tests, num_resources, required_resources)
 
+    new_min_makespan, start_times = find_start_time_resources(num_tests, num_resources_updated, durations, required_resources_updated, min_makespan_resources, max_makespan)
+    if new_min_makespan is not None:
+        if new_min_makespan > min_makespan:
+            min_makespan = new_min_makespan
     binary_search(num_tests=num_tests, num_machines=num_machines, num_resources=num_resources_updated, durations=durations, machine_eligible=machine_eligible, required_resources=required_resources_updated, min_makespan=min_makespan, max_makespan=max_makespan,
                                   min_test_duration=min_test_duration, hardcoded_machines=hardcoded_machines, initial_assigned_machines=assigned_machines, initial_start_times=start_times,
                                   resource_splits=resource_splits, total_resources_num=len(tests_ordered_by_resource_ids), tests_ordered_by_resource_ids=tests_ordered_by_resource_ids, tests_with_same_resources=tests_with_same_resources,
                                   tests_with_same_resources_splits=tests_with_same_resources_splits, num_tests_with_same_resources=num_tests_with_same_resources, num_tests_with_same_resources_splits=num_tests_with_same_resources_splits,
-                                  eq_tests=eq_tests, num_eq_tests=len_eq_tests, eq_machines=eq_machines, num_eq_machines=len_eq_machines) 
+                                  eq_tests=eq_tests, num_eq_tests=len_eq_tests, eq_machines=eq_machines, num_eq_machines=len_eq_machines, hardcoded_start_times=start_times) 
 
 
 if __name__ == "__main__":
